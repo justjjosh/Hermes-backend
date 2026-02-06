@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:16
+    container_name: hermes_db
+    environment:
+      POSTGRES_USER: hermes_user
+      POSTGRES_PASSWORD: hermes_password
+      POSTGRES_DB: hermesdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - hermes_data:/var/lib/postgresql/data
+
+volumes:
+  hermes_data:
