@@ -38,7 +38,7 @@ def update_brand(db: Session, brand_id: int, brand_update: BrandUpdate) -> Brand
     for key, value in update_data.items():
         setattr(db_brand, key, value)
 
-    db.commit(db_brand)
+    db.commit()
     db.refresh(db_brand)
     return db_brand
 
