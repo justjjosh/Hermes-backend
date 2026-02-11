@@ -6,7 +6,7 @@ uvicorn[standard]==0.30.0
 
 # Database
 sqlalchemy==2.0.35
-psycopg2-binary==2.9.9
+psycopg[binary]>=3.2.0
 alembic==1.13.2
 
 # Validation & Settings
@@ -17,7 +17,7 @@ pydantic-settings==2.5.0
 google-generativeai==0.8.0
 
 # Email (Mailgun via HTTP)
-requests==2.32.0
+requests>=2.32.3
 httpx==0.27.0
 
 # Environment Variables
