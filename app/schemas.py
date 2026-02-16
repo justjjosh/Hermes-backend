@@ -2,7 +2,9 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict
 from datetime import datetime
 
-#Brand pydantic validation
+# Brand pydantic validation
+
+
 class BrandCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     email: EmailStr
@@ -10,6 +12,7 @@ class BrandCreate(BaseModel):
     instagram: Optional[str] = Field(None, max_length=255)
     category: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = None
+
 
 class Brand(BrandCreate):
     id: int
@@ -24,6 +27,7 @@ class Brand(BrandCreate):
     class Config:
         from_attributes = True
 
+
 class BrandUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     email: Optional[EmailStr] = None
@@ -33,7 +37,9 @@ class BrandUpdate(BaseModel):
     notes: Optional[str] = None
     status: Optional[str] = Field(None, max_length=50)
 
-#Pydantic validation for creator's profile
+# Pydantic validation for creator's profile
+
+
 class ProfileCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     age: Optional[int] = None
@@ -53,6 +59,45 @@ class ProfileCreate(BaseModel):
     top_performing_content: Optional[str] = None
     pitch_template: Optional[str] = None
 
+
+# Pitch pydantic validation
+class PitchCreate(BaseModel):
+    brand_id: int
+    subject: str = Field(..., min_length=1, max_length=255)
+    body: str = Field(..., min_length=1)
+    mode: Optional[str] = Field(default='manual', max_length=50)
+    auto_approved: Optional[bool] = False
+
+
+class Pitch(BaseModel):
+    id: int
+    brand_id: int
+    creator_profile_id: int
+    subject: str
+    body: str
+    status: str
+    mode: str
+    auto_approved: bool
+    tracking_pixel_id: Optional[str]
+    sent_at: Optional[datetime]
+    opened_at: Optional[datetime]
+    clicked_at: Optional[datetime]
+    replied_at: Optional[datetime]
+    reply_notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PitchUpdate(BaseModel):
+    subject: Optional[str] = Field(None, min_length=1, max_length=255)
+    body: Optional[str] = Field(None, min_length=1)
+    status: Optional[str] = Field(None, max_length=50)
+    reply_notes: Optional[str] = None
+
+
 class Profile(ProfileCreate):
     id: int
     created_at: datetime
@@ -60,6 +105,7 @@ class Profile(ProfileCreate):
 
     class Config:
         from_attributes = True
+
 
 class ProfileUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
