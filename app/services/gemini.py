@@ -4,26 +4,27 @@ from typing import Dict, List
 from app.services.ai_provider import AIProvider
 from app.config import settings
 
+
 class GeminiProvider(AIProvider):
     def __init__(self):
         """Initialize Gemini provider with API key from settings."""
         genai.configure(api_key=settings.gemini_api_key)
-        self.model = genai.GenerativeModel("gemini-1.5-flash")
-    
+        self.model = genai.GenerativeModel("gemini-2.5-flash")
+
     def generate_pitch(self, brand_data: dict, profile_data: dict) -> Dict[str, str]:
         """
         Generate a personalized pitch using Gemini.
-        
+
         Args:
             brand_data: Dictionary with brand info (name, website, category, etc.)
             profile_data: Dictionary with creator info (name, niches, bio, etc.)
-        
+
         Returns:
             Dictionary with 'subject' and 'body' keys
         """
         # Build the prompt
         prompt = f"""
-You are a professional brand partnership manager writing a pitch email on behalf of a content creator.
+You are {profile_data.get('name', 'a content creator')} writing a pitch email directly to a brand. Write in FIRST PERSON - you are the creator, not a manager or agent.
 
 BRAND INFORMATION:
 - Name: {brand_data.get('name', 'Unknown')}
@@ -32,8 +33,9 @@ BRAND INFORMATION:
 - Instagram: {brand_data.get('instagram', 'Not provided')}
 - Notes: {brand_data.get('notes', 'Not provided')}
 
-CREATOR INFORMATION:
+YOUR CREATOR PROFILE:
 - Name: {profile_data.get('name', 'Unknown')}
+- Email: {profile_data.get('sender_email', 'Not provided')}
 - Niches: {', '.join(profile_data.get('niches', []))}
 - Interests: {', '.join(profile_data.get('interests', []))}
 - Bio: {profile_data.get('bio', 'Not provided')}
@@ -47,17 +49,31 @@ CREATOR INFORMATION:
 - Engagement Rate: {profile_data.get('engagement_rate', 0)}%
 
 INSTRUCTIONS:
-Generate a highly personalized, professional pitch email that:
-1. Has a compelling subject line (under 60 characters)
-2. Opens with a personalized greeting
-3. Demonstrates knowledge of the brand's values and products
-4. Explains why this creator is an authentic fit for the brand
-5. Includes specific collaboration ideas
-6. Has a clear call-to-action
-7. Ends with a professional signature
+Write a concise, professional pitch email FROM the creator's perspective (first person - "I'm...", "My content...", "I'd love...").
 
-The email body should be in HTML format with proper paragraph tags (<p>, <br>, etc.).
-Make it warm, genuine, and professional - not salesy or desperate.
+SUBJECT LINE:
+- Professional and direct (e.g., "Collaboration Inquiry – [Content Type] Content")
+- Under 60 characters
+- No emojis or overly casual language
+
+EMAIL BODY (KEEP IT CONCISE - max 4-5 short paragraphs):
+1. Brief greeting and one-sentence introduction (name, location, content focus)
+2. One paragraph explaining why the brand aligns with your audience (mention specific brand values/products)
+3. Mention ONE key performance metric to show credibility
+4. List 3-4 collaboration ideas as bullet points (short, specific)
+5. Simple call-to-action offering to share analytics/discuss deliverables
+6. Professional sign-off with name, TikTok handle, email, and portfolio URL (if available)
+
+TONE: Professional, direct, confident but not salesy. Business inquiry, not fan mail.
+FORMAT: HTML with <p> tags. Use bullet points (<ul><li>) for ideas only.
+
+FOOTER/SIGNATURE:
+- Always include: Name, TikTok handle ({profile_data.get('tiktok_url')}), Email ({profile_data.get('sender_email')})
+- If portfolio URL exists ({profile_data.get('portfolio_url')}), include it too
+- Format: "Best regards,\\nName\\nTikTok: @handle\\nEmail: actual@email.com\\nPortfolio: url" (only if portfolio exists)
+
+CRITICAL: Use the ACTUAL email address provided: {profile_data.get('sender_email')}
+Do NOT make up a fake email address.
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -65,7 +81,7 @@ Return ONLY valid JSON in this exact format:
   "body": "<p>Your HTML email body here</p>"
 }}
 """
-        
+
         # Call Gemini API with JSON output
         response = self.model.generate_content(
             prompt,
@@ -73,22 +89,22 @@ Return ONLY valid JSON in this exact format:
                 response_mime_type="application/json"
             )
         )
-        
+
         # Parse JSON response
         pitch = json.loads(response.text)
-        
+
         return pitch
-    
+
     def discover_brands(self, niches: List[str], limit: int = 10) -> List[dict]:
         """
-        Discover brands matching given niches (Phase 9 - Auto-pilot).
-        
+        Discover brands matching given niches(Phase 9 - Auto-pilot).
+
         Args:
-            niches: List of niche keywords (e.g., ["skincare", "wellness"])
+            niches: List of niche keywords(e.g., ["skincare", "wellness"])
             limit: Maximum number of brands to discover
-        
+
         Returns:
             List of dictionaries with brand data
         """
-        raise NotImplementedError("Brand discovery will be implemented in Phase 9 (Auto-pilot mode)")
-
+        raise NotImplementedError(
+            "Brand discovery will be implemented in Phase 9 (Auto-pilot mode)")
