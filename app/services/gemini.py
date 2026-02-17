@@ -62,18 +62,16 @@ EMAIL BODY (KEEP IT CONCISE - max 4-5 short paragraphs):
 3. Mention ONE key performance metric to show credibility
 4. List 3-4 collaboration ideas as bullet points (short, specific)
 5. Simple call-to-action offering to share analytics/discuss deliverables
-6. Professional sign-off with name, TikTok handle, email, and portfolio URL (if available)
+6. Professional sign-off with name, TikTok handle, and portfolio URL (if available) - NO EMAIL
 
 TONE: Professional, direct, confident but not salesy. Business inquiry, not fan mail.
 FORMAT: HTML with <p> tags. Use bullet points (<ul><li>) for ideas only.
 
 FOOTER/SIGNATURE:
-- Always include: Name, TikTok handle ({profile_data.get('tiktok_url')}), Email ({profile_data.get('sender_email')})
+- Always include: Name, TikTok handle ({profile_data.get('tiktok_url')})
 - If portfolio URL exists ({profile_data.get('portfolio_url')}), include it too
-- Format: "Best regards,\\nName\\nTikTok: @handle\\nEmail: actual@email.com\\nPortfolio: url" (only if portfolio exists)
-
-CRITICAL: Use the ACTUAL email address provided: {profile_data.get('sender_email')}
-Do NOT make up a fake email address.
+- Format: "Best regards,\\nName\\nTikTok: @handle\\nPortfolio: url" (only if portfolio exists)
+- DO NOT INCLUDE EMAIL ADDRESS - the email is already in the FROM field
 
 Return ONLY valid JSON in this exact format:
 {{
