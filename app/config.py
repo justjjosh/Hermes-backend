@@ -4,10 +4,8 @@ class Settings(BaseSettings):
     database_url: str
     postgres_password: str
     gemini_api_key: str
-    mailgun_api_key: str
-    mailgun_domain: str
-    mailgun_webhook_signing_key: str
-    api_base_url: str
+    resend_api_key: str
+    api_base_url: str = "http://localhost:8000"
     ai_provider: str
     secret_key: str
 
