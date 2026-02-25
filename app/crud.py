@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 from app.models import Brand as BrandModel, Profile as ProfileModel, Pitch as PitchModel
 from typing import Optional, List
 from app.schemas import BrandCreate, BrandUpdate, ProfileCreate, ProfileUpdate, PitchCreate, PitchUpdate
@@ -155,3 +156,13 @@ def delete_pitch(db: Session, pitch_id: int) -> bool:
     db.delete(db_pitch)
     db.commit()
     return True
+
+def update_pitch_after_send(db: Session, pitch_id: int, tracking_pixel_id: str) -> PitchModel:
+    pitch = db.query(PitchModel).filter(PitchModel.id == pitch_id).first()
+    if pitch:
+        pitch.status = "sent"
+        pitch.tracking_pixel_id = tracking_pixel_id
+        pitch.sent_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(pitch)
+    return pitch

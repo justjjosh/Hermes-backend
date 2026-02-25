@@ -5,6 +5,8 @@ from app.database import get_db
 from app.schemas import Pitch, PitchCreate
 from app.models import Brand as BrandModel, Profile as ProfileModel
 from app import crud
+from app.config import settings
+from app.services.email import generate_tracking_pixel_id, embed_tracking_pixel, send_email_via_resend
 from app.services.gemini import GeminiProvider
 
 router = APIRouter(prefix="/pitches", tags=["pitches"])
@@ -84,3 +86,54 @@ def list_pitches(
     db: Session = Depends(get_db)
 ):
     return crud.get_pitches(db, skip, limit, status, brand_id, mode)
+
+@router.get("/{pitch_id}", response_model = Pitch)
+def get_pitch(pitch_id: int, db: Session = Depends(get_db)):
+    pitch = crud.get_pitch(db=db, pitch_id = pitch_id)
+    if not pitch:
+        raise HTTPException(status_code=404, detail="Pitch not found")
+    return pitch
+
+@router.post("/{pitch_id}/send", response_model = Pitch)
+def send_pitch(pitch_id: int, db: Session = Depends(get_db)):
+    pitch = crud.get_pitch(db, pitch_id)
+    if not pitch:
+        raise HTTPException(status_code=404, detail="pitch not found")
+    
+    if pitch.status != 'draft':
+        raise HTTPException(status_code=400, detail=f"pitch already {pitch.status}. only draft pitches can be sent")
+    
+    brand = crud.get_brand(db, pitch.brand_id)
+    if not brand:
+        raise HTTPException(status_code=404, detail="brand not found")
+    
+    creator = crud.get_profile(db)
+    if not creator:
+        raise HTTPException(status_code=404, detail="creator not found")
+    
+    pixel_tag = generate_tracking_pixel_id()
+    html_body_with_pixel = embed_tracking_pixel(
+        body = pitch.body,
+        tracking_pixel_id = pixel_tag,
+        base_url = settings.api_base_url
+    )
+    try:
+        send_email_via_resend(
+            to_email = brand.email,
+            subject = pitch.subject,
+            body_html = html_body_with_pixel,
+            reply_to = creator.sender_email
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send email: {e}"
+        )
+    
+    updated_pitch = crud.update_pitch_after_send(
+        db=db,
+        pitch_id=pitch_id,
+        tracking_pixel_id=pixel_tag,
+    )
+
+    return updated_pitch
