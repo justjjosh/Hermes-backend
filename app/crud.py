@@ -166,3 +166,17 @@ def update_pitch_after_send(db: Session, pitch_id: int, tracking_pixel_id: str) 
         db.commit()
         db.refresh(pitch)
     return pitch
+
+# ============ TRACKING PIXEL CRUD ============
+
+def get_pitch_by_tracking_id(db: Session, tracking_pixel_id: str):
+    pitch = db.query(PitchModel).filter(PitchModel.tracking_pixel_id == tracking_pixel_id).first()
+    return pitch
+    
+def record_pitch_opened(db: Session, pitch_id: int):
+    pitch = db.query(PitchModel).filter(PitchModel.id == pitch_id).first()
+    if pitch and not pitch.opened_at:
+        pitch.opened_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(pitch)
+    return pitch
