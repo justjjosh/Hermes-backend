@@ -25,7 +25,7 @@ def send_email_via_resend(
 ) -> dict:
     try: 
         params = {
-            "from": "josh <onboarding@resend.dev>",
+            "from": "josh <josh@outreach.rajicloud.me>",
             "to": [to_email],
             "subject": subject,
             "html": body_html,
