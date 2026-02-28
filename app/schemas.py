@@ -4,7 +4,7 @@ from datetime import datetime
 
 # Brand pydantic validation
 
-
+#Pydantic schema for Brands
 class BrandCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     email: EmailStr
@@ -40,6 +40,7 @@ class BrandUpdate(BaseModel):
 # Pydantic validation for creator's profile
 
 
+#Pydantic schema for creators
 class ProfileCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     age: Optional[int] = None
@@ -60,7 +61,7 @@ class ProfileCreate(BaseModel):
     pitch_template: Optional[str] = None
 
 
-# Pitch pydantic validation
+#Pydantic schema for pitch
 class PitchCreate(BaseModel):
     brand_id: int
     subject: str = Field(..., min_length=1, max_length=255)
@@ -125,3 +126,45 @@ class ProfileUpdate(BaseModel):
     unique_angle: Optional[str] = None
     top_performing_content: Optional[str] = None
     pitch_template: Optional[str] = None
+
+#Pydantic schema for Brand Discovery
+
+class BrandDiscoveryRequest(BaseModel):
+    brand_name: str
+
+class DiscoveredContact(BaseModel):
+    email: str
+    type: str
+    confidence: str
+    source: str
+
+class BrandDiscoveryResponse(BaseModel): 
+    brand_name: str
+    parent_company: Optional[str] = None
+    website: Optional[str] = None
+    instagram: Optional[str] = None
+    category: Optional[str] = None
+    contacts: List[DiscoveredContact]
+
+class SelectedContact(BaseModel):
+    email: str
+    type: str
+
+class DiscoveryPitchRequest(BaseModel):
+    brand_name: str
+    website: Optional[str] = None
+    instagram: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    selected_contacts: List[SelectedContact]
+
+class DiscoveryPitchResult(BaseModel):
+    email: str
+    brand_id: Optional[int] = None
+    pitch_id: Optional[int] = None
+    status: str  # "sent", "failed", "duplicate"
+    error: Optional[str] = None
+
+class DiscoveryPitchResponse(BaseModel):
+    brand_name: str
+    results: List[DiscoveryPitchResult]
