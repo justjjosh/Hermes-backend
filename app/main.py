@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import brands, profile, pitches, tracking
+from app.routers import brands, profile, pitches, tracking, discovery
 
 # create FastAPI app
 app = FastAPI(
@@ -22,6 +22,7 @@ app.include_router(brands.router)
 app.include_router(profile.router)
 app.include_router(pitches.router)
 app.include_router(tracking.router, prefix="/track", tags=["tracking"])
+app.include_router(discovery.router, prefix="/discover", tags=["discovery"])
 
 
 @app.get("/")
