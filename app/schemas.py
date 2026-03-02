@@ -144,6 +144,7 @@ class BrandDiscoveryResponse(BaseModel):
     website: Optional[str] = None
     instagram: Optional[str] = None
     category: Optional[str] = None
+    description: Optional[str] = None
     contacts: List[DiscoveredContact]
 
 class SelectedContact(BaseModel):
