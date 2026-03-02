@@ -83,9 +83,10 @@ def list_pitches(
     status: Optional[str] = None,
     brand_id: Optional[int] = None,
     mode: Optional[str] = None,
+    sort: str = "newest",
     db: Session = Depends(get_db)
 ):
-    return crud.get_pitches(db, skip, limit, status, brand_id, mode)
+    return crud.get_pitches(db, skip, limit, status, brand_id, mode, sort)
 
 @router.get("/{pitch_id}", response_model = Pitch)
 def get_pitch(pitch_id: int, db: Session = Depends(get_db)):
@@ -136,4 +137,16 @@ def send_pitch(pitch_id: int, db: Session = Depends(get_db)):
         tracking_pixel_id=pixel_tag,
     )
 
+    # Update the brand's status to "pitched"
+    crud.update_brand_status(db, brand.id, "pitched")
+
     return updated_pitch
+
+@router.delete("/{pitch_id}")
+def delete_pitch(pitch_id: int, db: Session = Depends(get_db)):
+    success = crud.get_pitch(db, pitch_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="pitch not found")
+        
+    return {"message": "Brand deleted successfully"}
+ 
