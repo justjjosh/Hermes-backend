@@ -14,7 +14,10 @@ router = APIRouter(
 
 @router.post("/", response_model=Brand)
 def create_brand(brand: BrandCreate, db: Session = Depends(get_db)):
-    return crud.create_brand(db=db, brand=brand)
+    try:
+        return crud.create_brand(db=db, brand=brand)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 @router.get("/{brand_id}", response_model=Brand)
 def get_brand(brand_id: int, db: Session = Depends(get_db)):
@@ -24,8 +27,8 @@ def get_brand(brand_id: int, db: Session = Depends(get_db)):
     return db_brand
 
 @router.get("/", response_model=List[Brand])
-def get_brands(skip: int = 0, limit: int = 10, status: Optional[str] = None, category: Optional[str] = None, db: Session = Depends(get_db)):
-    return crud.get_brands(db, skip, limit, status, category)
+def get_brands(skip: int = 0, limit: int = 200, status: Optional[str] = None, category: Optional[str] = None, sort: str = "newest", db: Session = Depends(get_db)):
+    return crud.get_brands(db, skip, limit, status, category, sort)
 
 @router.put("/{brand_id}", response_model = Brand)
 def update_brand(brand_id: int, brand_update: BrandUpdate, db: Session = Depends(get_db)):

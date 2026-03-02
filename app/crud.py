@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from datetime import datetime, timezone
 from app.models import Brand as BrandModel, Profile as ProfileModel, Pitch as PitchModel
 from typing import Optional, List, Union, Dict
@@ -14,6 +15,13 @@ def create_brand(db: Session, brand: Union[BrandCreate, Dict]) -> BrandModel:
     else:
         brand_data = brand.model_dump()
 
+    # Check if a brand with this email already exists
+    email = brand_data.get("email")
+    if email:
+        existing = get_brand_by_email(db, email)
+        if existing:
+            raise ValueError(f"A brand with email '{email}' already exists (id={existing.id}, name='{existing.name}')")
+
     new_brand = BrandModel(**brand_data)
     db.add(new_brand)
     db.commit()
@@ -28,15 +36,21 @@ def get_brand(db: Session, brand_id: int) -> Optional[BrandModel]:
 def get_brands(
         db: Session,
         skip: int = 0,
-        limit: int = 100,
+        limit: int = 200,
         status: Optional[str] = None,
-        category: Optional[str] = None
+        category: Optional[str] = None,
+        sort: str = "newest"
 ) -> List[BrandModel]:
     query = db.query(BrandModel)
     if status:
         query = query.filter(BrandModel.status == status)
     if category:
         query = query.filter(BrandModel.category == category)
+
+    if sort == "oldest":
+        query = query.order_by(BrandModel.created_at.asc())
+    else:
+        query = query.order_by(BrandModel.created_at.desc())
 
     return query.offset(skip).limit(limit).all()
 
@@ -70,6 +84,130 @@ def delete_brand(db: Session, brand_id: int) -> bool:
 def get_brand_by_email(db: Session, email: str) -> Optional[BrandModel]:
     """Check if a brand with this email already exists."""
     return db.query(BrandModel).filter(BrandModel.email == email).first()
+
+
+def update_brand_status(db: Session, brand_id: int, status: str) -> Optional[BrandModel]:
+    """Update a brand's status to reflect where it is in the pitch lifecycle.
+    
+    Status flow:
+        not_contacted → pitched → opened → replied → partnership
+                                                   → rejected
+    
+    Args:
+        db: Database session
+        brand_id: The brand to update
+        status: New status string
+    
+    Returns:
+        Updated BrandModel, or None if brand not found
+    """
+    brand = get_brand(db, brand_id)
+    if not brand:
+        return None
+    
+    brand.status = status
+    brand.last_pitched_at = datetime.now(timezone.utc) if status == "pitched" else brand.last_pitched_at
+    db.commit()
+    db.refresh(brand)
+    return brand
+
+
+def get_discovered_brand_cache(db: Session, brand_name: str) -> Optional[dict]:
+    """Check if we've already discovered this brand via AI.
+    
+    Searches the brands table for any entry that:
+    1. Has a name containing the brand_name (case-insensitive)
+    2. Was discovered by AI (discovered_by_ai = True)
+    3. Has cached metadata stored in brand_metadata
+    
+    If found, returns the cached discovery data so we don't
+    have to call the Gemini API again.
+    
+    Args:
+        db: Database session
+        brand_name: Brand name to search for (e.g., "CeraVe")
+    
+    Returns:
+        dict: Cached discovery data matching BrandDiscoveryResponse format
+        None: If brand hasn't been discovered before
+    """
+    # Search for any AI-discovered brand with a matching name
+    # func.lower() makes it case-insensitive: "cerave" matches "CeraVe (pr)"
+    # .like() with % wildcards matches partial names: "CeraVe" matches "CeraVe (pr)"
+    cached_brand = db.query(BrandModel).filter(
+        func.lower(BrandModel.name).like(f"%{brand_name.lower()}%"),
+        BrandModel.discovered_by_ai.is_(True)
+    ).first()
+    
+    # If no match found, or match has no cached metadata, return None
+    if not cached_brand or not cached_brand.brand_metadata:
+        return None
+    
+    # Return the cached metadata (it's already in BrandDiscoveryResponse format)
+    return cached_brand.brand_metadata
+
+
+def cache_discovered_brand(db: Session, discovery_data: dict) -> BrandModel:
+    """Save Gemini discovery results to the database as a cache entry.
+    
+    Creates ONE brand entry specifically for caching purposes:
+    - Uses the first contact email as the brand email
+    - Stores the FULL discovery response in brand_metadata (JSONB)
+    - Marks discovered_by_ai = True so we can find it later
+    - Sets status to 'discovered' (not 'not_contacted')
+    
+    This cache entry exists so that future searches for the same brand
+    return instantly from the database instead of calling the API.
+    
+    The actual brand entries for pitching are created later by the
+    /discover/pitch endpoint (one per selected contact).
+    
+    Args:
+        db: Database session
+        discovery_data: Full response from gemini.discover_brand_contacts()
+    
+    Returns:
+        BrandModel: The created cache entry
+    """
+    brand_name = discovery_data.get("brand_name", "Unknown")
+    
+    # ALWAYS use a placeholder email for cache entries.
+    # Previously, we used the first contact's real email here, which caused
+    # the "ghost brand" bug: when /discover/pitch later tried to create a brand
+    # with that same real email, get_brand_by_email() found this cache entry
+    # and marked the contact as "duplicate" — so the real brand was never created,
+    # and the pitch was never generated. The cache entry would sit in the database
+    # with a name like "CeraVe (discovered)" and no pitch attached.
+    cache_email = f"cache-{brand_name.lower().replace(' ', '-')}@discovered.hermes"
+    
+    # Check if this exact cache entry already exists (avoid duplicates)
+    existing = get_brand_by_email(db, cache_email)
+    if existing:
+        # Update the existing entry's metadata with fresh data
+        existing.brand_metadata = discovery_data
+        existing.discovered_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(existing)
+        return existing
+    
+    # Create a new cache entry
+    cache_brand = BrandModel(
+        name=f"{brand_name} (discovered)",
+        email=cache_email,
+        website=discovery_data.get("website"),
+        instagram=discovery_data.get("instagram"),
+        category=discovery_data.get("category"),
+        notes=discovery_data.get("description"),
+        status="discovered",
+        discovered_by_ai=True,
+        discovered_at=datetime.now(timezone.utc),
+        brand_metadata=discovery_data
+    )
+    db.add(cache_brand)
+    db.commit()
+    db.refresh(cache_brand)
+    
+    return cache_brand
 
 
 # ============ Creator Profile CRUD ============
@@ -129,9 +267,10 @@ def get_pitches(
     limit: int = 100,
     status: Optional[str] = None,
     brand_id: Optional[int] = None,
-    mode: Optional[str] = None
+    mode: Optional[str] = None,
+    sort: str = "newest"
 ) -> List[PitchModel]:
-    """Get all pitches with optional filtering."""
+    """Get all pitches with optional filtering and sorting."""
     query = db.query(PitchModel)
 
     if status:
@@ -140,6 +279,11 @@ def get_pitches(
         query = query.filter(PitchModel.brand_id == brand_id)
     if mode:
         query = query.filter(PitchModel.mode == mode)
+
+    if sort == "oldest":
+        query = query.order_by(PitchModel.created_at.asc())
+    else:
+        query = query.order_by(PitchModel.created_at.desc())
 
     return query.offset(skip).limit(limit).all()
 
@@ -296,5 +440,8 @@ def send_pitch_email(db: Session, pitch_id: int) -> PitchModel:
     
     # Update pitch status using the existing function
     updated_pitch = update_pitch_after_send(db, pitch_id, tracking_pixel_id)
+    
+    # Update the brand's status to "pitched"
+    update_brand_status(db, brand.id, "pitched")
     
     return updated_pitch

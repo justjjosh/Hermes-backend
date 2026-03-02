@@ -2,9 +2,14 @@ import google.generativeai as genai_old  # OLD SDK - for pitch generation
 from google import genai                # NEW SDK - for brand discovery (supports search grounding)
 from google.genai import types          # Types for configuring the new SDK
 import json
+import time
+import re
+import logging
 from typing import Dict, List
 from app.services.ai_provider import AIProvider
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 #Pitch generation
@@ -78,7 +83,7 @@ FOOTER/SIGNATURE:
 - Always include: Name, TikTok username, and TikTok URL as clickable link
 - If portfolio URL exists, include it as clickable link too
 - Format TikTok username: "TikTok: @username" (extract from {profile_data.get('tiktok_url')})
-- Format TikTok URL: <a href="{profile_data.get('tiktok_url')}">www.tiktok.com/@username</a>
+- Format TikTok URL: <a href="{profile_data.get('tiktok_url')}">https://www.tiktok.com/@username</a>
 - Include BOTH the @username and the clickable URL on separate lines
 - Format Portfolio: <a href="{profile_data.get('portfolio_url')}">View Portfolio</a>
 - DO NOT INCLUDE EMAIL ADDRESS - the email is already in the FROM field
@@ -91,12 +96,52 @@ Return ONLY valid JSON in this exact format:
 """
 
         # Call Gemini API with JSON output
-        response = self.model.generate_content(
-            prompt,
-            generation_config=genai_old.GenerationConfig(
-                response_mime_type="application/json"
-            )
-        )
+        # Only retry twice for pitch generation — if quota is exhausted,
+        # fail fast with a clear message instead of making the user wait 5 minutes
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=genai_old.GenerationConfig(
+                        response_mime_type="application/json"
+                    )
+                )
+                break  # Success — exit the retry loop
+            except Exception as e:
+                error_str = str(e).lower()
+                # Only retry on rate limit errors (429 / RESOURCE_EXHAUSTED)
+                if "429" in error_str or "resource_exhausted" in error_str or "rate" in error_str:
+                    if attempt == max_retries - 1:
+                        raise Exception(
+                            "Gemini rate limit reached. "
+                            "You've made too many AI requests recently. "
+                            "Wait 1-2 minutes and try again."
+                        )
+                    
+                    # Try to extract the wait time from the error message
+                    match = re.search(r'retry\s*(?:in|after)\s*(\d+\.?\d*)', error_str)
+                    if match:
+                        wait_time = float(match.group(1)) + 1  # Add 1s buffer
+                    else:
+                        wait_time = 15
+
+                    # If Gemini wants us to wait more than 30s, fail fast
+                    # instead of blocking the request for a full minute
+                    if wait_time > 30:
+                        raise Exception(
+                            "Gemini rate limit reached. "
+                            "You've made too many AI requests recently. "
+                            "Wait 1-2 minutes and try again."
+                        )
+
+                    logger.warning(
+                        f"Rate limited on pitch generation (attempt {attempt + 1}/{max_retries}). "
+                        f"Waiting {wait_time:.1f}s before retry..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    raise  # Non-rate-limit error — don't retry, raise immediately
 
         # Parse JSON response
         pitch = json.loads(response.text)
@@ -195,26 +240,66 @@ Return ONLY the JSON, no other text.
 
         # Step 3: Send the request to Gemini using the NEW SDK
         # We use self.discovery_client (initialized in __init__) with search grounding
-        # The config tells Gemini to use the Google Search tool before answering
-        try:
-            response = self.discovery_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[google_search_tool],
-                    temperature=0.2  # Low temperature = more factual, less creative
+        # Discovery gets 3 retries (heavier operation, user expects it to take a moment)
+        max_retries = 3
+        raw_text = None
+
+        for attempt in range(max_retries):
+            try:
+                response = self.discovery_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[google_search_tool],
+                        temperature=0.2  # Low temperature = more factual, less creative
+                    )
                 )
-            )
-            
-            # Step 4: Extract the text from response
-            if hasattr(response, 'text') and response.text:
-                raw_text = response.text
-            elif hasattr(response, 'candidates') and response.candidates:
-                raw_text = response.candidates[0].content.parts[0].text
-            else:
-                raise Exception(f"Unexpected response structure: {response}")
-            
-            # Step 5: Clean up markdown code blocks if present
+                
+                # Step 4: Extract the text from response
+                if hasattr(response, 'text') and response.text:
+                    raw_text = response.text
+                elif hasattr(response, 'candidates') and response.candidates:
+                    raw_text = response.candidates[0].content.parts[0].text
+                else:
+                    raise Exception(f"Unexpected response structure: {response}")
+                
+                break  # Success — exit the retry loop
+
+            except Exception as e:
+                error_str = str(e).lower()
+                # Only retry on rate limit errors (429 / RESOURCE_EXHAUSTED)
+                if "429" in error_str or "resource_exhausted" in error_str or "rate" in error_str:
+                    if attempt == max_retries - 1:
+                        raise Exception(
+                            "Gemini rate limit reached. "
+                            "You've made too many AI requests recently. "
+                            "Wait 1-2 minutes and try again."
+                        )
+
+                    match = re.search(r'retry\s*(?:in|after)\s*(\d+\.?\d*)', error_str)
+                    if match:
+                        wait_time = float(match.group(1)) + 1
+                    else:
+                        wait_time = 15 * (attempt + 1)  # Fallback: 15s, 30s, 45s
+
+                    # If Gemini wants us to wait more than 60s, fail fast
+                    if wait_time > 60:
+                        raise Exception(
+                            "Gemini rate limit reached. "
+                            "You've made too many AI requests recently. "
+                            "Wait 1-2 minutes and try again."
+                        )
+
+                    logger.warning(
+                        f"Rate limited on brand discovery (attempt {attempt + 1}/{max_retries}). "
+                        f"Waiting {wait_time:.1f}s before retry..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    raise  # Non-rate-limit error — don't retry
+
+        # Step 5: Clean up markdown code blocks and parse JSON
+        try:
             cleaned_text = raw_text.strip()
             if cleaned_text.startswith("```json"):
                 cleaned_text = cleaned_text[7:]
