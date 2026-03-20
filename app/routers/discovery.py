@@ -29,7 +29,6 @@ def search_brand(request: BrandDiscoveryRequest, db: Session = Depends(get_db)):
     cached_data = crud.get_discovered_brand_cache(db, request.brand_name)
     
     if cached_data:
-        # Cache hit — return immediately without calling Gemini
         return cached_data
     
     # Step 2: Cache miss — call Gemini API with web search
@@ -43,7 +42,6 @@ def search_brand(request: BrandDiscoveryRequest, db: Session = Depends(get_db)):
         )
     
     # Step 3: Validate and sanitize the result before saving/returning
-    # Gemini sometimes returns null or missing fields — fill in safe defaults
     # so Pydantic validation doesn't blow up
     result.setdefault("brand_name", request.brand_name)
     result.setdefault("parent_company", None)
