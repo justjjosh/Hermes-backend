@@ -97,7 +97,6 @@ Return ONLY valid JSON in this exact format:
 
         # Call Gemini API with JSON output
         # Only retry twice for pitch generation — if quota is exhausted,
-        # fail fast with a clear message instead of making the user wait 5 minutes
         max_retries = 2
         for attempt in range(max_retries):
             try:
