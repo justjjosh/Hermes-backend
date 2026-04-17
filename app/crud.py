@@ -1,7 +1,10 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timezone
-from app.models import Brand as BrandModel, Profile as ProfileModel, Pitch as PitchModel
+from app.models import (
+    Brand as BrandModel, Profile as ProfileModel, Pitch as PitchModel,
+    AutopilotConfig as AutopilotConfigModel, AutopilotLog as AutopilotLogModel
+)
 from typing import Optional, List, Union, Dict
 from app.services.gemini import GeminiProvider
 from app.schemas import BrandCreate, BrandUpdate, ProfileCreate, ProfileUpdate, PitchCreate, PitchUpdate
@@ -445,3 +448,232 @@ def send_pitch_email(db: Session, pitch_id: int) -> PitchModel:
     update_brand_status(db, brand.id, "pitched")
     
     return updated_pitch
+
+
+# ============ WEBHOOK EVENT CRUD ============
+
+def record_pitch_clicked(db: Session, pitch_id: int):
+    """Record that a link in the pitch email was clicked."""
+    pitch = db.query(PitchModel).filter(PitchModel.id == pitch_id).first()
+    if pitch and not pitch.clicked_at:
+        pitch.clicked_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(pitch)
+    return pitch
+
+
+def record_pitch_bounced(db: Session, pitch_id: int):
+    """Record that the pitch email bounced."""
+    pitch = db.query(PitchModel).filter(PitchModel.id == pitch_id).first()
+    if pitch:
+        pitch.status = "bounced"
+        db.commit()
+        db.refresh(pitch)
+    return pitch
+
+
+def record_pitch_replied(db: Session, pitch_id: int):
+    """Record that the brand replied to the pitch."""
+    pitch = db.query(PitchModel).filter(PitchModel.id == pitch_id).first()
+    if pitch and not pitch.replied_at:
+        pitch.replied_at = datetime.now(timezone.utc)
+        pitch.status = "replied"
+        db.commit()
+        db.refresh(pitch)
+        # Also update the brand status
+        update_brand_status(db, pitch.brand_id, "replied")
+    return pitch
+
+
+# ============ ANALYTICS CRUD ============
+
+def get_analytics_overview(db: Session) -> dict:
+    """Compute aggregate pitch stats from the database.
+    
+    Pure SQL queries — zero AI tokens used.
+    """
+    from datetime import timedelta
+    
+    pitches = db.query(PitchModel).all()
+    brands = db.query(BrandModel).all()
+    
+    # Use naive datetime to match PostgreSQL TIMESTAMP (no timezone info)
+    now = datetime.utcnow()
+    week_ago = now - timedelta(days=7)
+    month_ago = now - timedelta(days=30)
+    
+    # Status breakdown
+    status_counts = {"draft": 0, "sent": 0, "opened": 0, "clicked": 0, "replied": 0, "bounced": 0}
+    for p in pitches:
+        status = p.status or "draft"
+        if status in status_counts:
+            status_counts[status] += 1
+    
+    # Rates
+    sent_count = sum(1 for p in pitches if p.sent_at is not None)
+    opened_count = sum(1 for p in pitches if p.opened_at is not None)
+    replied_count = sum(1 for p in pitches if p.replied_at is not None)
+    
+    open_rate = (opened_count / sent_count * 100) if sent_count > 0 else 0.0
+    reply_rate = (replied_count / sent_count * 100) if sent_count > 0 else 0.0
+    
+    # Time-based
+    pitches_this_week = sum(1 for p in pitches if p.sent_at and p.sent_at >= week_ago)
+    pitches_this_month = sum(1 for p in pitches if p.sent_at and p.sent_at >= month_ago)
+    
+    # Average open time
+    open_times = []
+    for p in pitches:
+        if p.sent_at and p.opened_at:
+            delta = (p.opened_at - p.sent_at).total_seconds() / 3600
+            if delta > 0:
+                open_times.append(delta)
+    avg_open_time = sum(open_times) / len(open_times) if open_times else None
+    
+    return {
+        "total_brands": len(brands),
+        "total_pitches": len(pitches),
+        "status_breakdown": status_counts,
+        "open_rate": round(open_rate, 1),
+        "reply_rate": round(reply_rate, 1),
+        "pitches_this_week": pitches_this_week,
+        "pitches_this_month": pitches_this_month,
+        "avg_open_time_hours": round(avg_open_time, 1) if avg_open_time else None,
+    }
+
+
+def get_brand_analytics(db: Session, brand_id: int) -> Optional[dict]:
+    """Get all pitch history for a specific brand."""
+    brand = get_brand(db, brand_id)
+    if not brand:
+        return None
+    
+    pitches = db.query(PitchModel).filter(
+        PitchModel.brand_id == brand_id
+    ).order_by(PitchModel.created_at.desc()).all()
+    
+    pitch_summaries = []
+    for p in pitches:
+        pitch_summaries.append({
+            "pitch_id": p.id,
+            "subject": p.subject,
+            "status": p.status,
+            "mode": p.mode,
+            "sent_at": p.sent_at,
+            "opened_at": p.opened_at,
+            "replied_at": p.replied_at,
+            "created_at": p.created_at,
+        })
+    
+    return {
+        "brand_id": brand.id,
+        "brand_name": brand.name,
+        "total_pitches": len(pitches),
+        "pitches": pitch_summaries,
+    }
+
+
+# ============ AUTOPILOT CRUD ============
+
+def get_autopilot_config(db: Session) -> Optional[AutopilotConfigModel]:
+    """Get the autopilot config (singleton — only one row)."""
+    return db.query(AutopilotConfigModel).first()
+
+
+def create_autopilot_config(db: Session, config_data: dict) -> AutopilotConfigModel:
+    """Create the autopilot config. Only one should ever exist."""
+    existing = get_autopilot_config(db)
+    if existing:
+        # Update existing instead of creating duplicate
+        for key, value in config_data.items():
+            if value is not None:
+                setattr(existing, key, value)
+        db.commit()
+        db.refresh(existing)
+        return existing
+    
+    new_config = AutopilotConfigModel(**config_data)
+    db.add(new_config)
+    db.commit()
+    db.refresh(new_config)
+    return new_config
+
+
+def update_autopilot_config(db: Session, update_data: dict) -> Optional[AutopilotConfigModel]:
+    """Update the autopilot config."""
+    config = get_autopilot_config(db)
+    if not config:
+        return None
+    
+    for key, value in update_data.items():
+        if value is not None:
+            setattr(config, key, value)
+    
+    db.commit()
+    db.refresh(config)
+    return config
+
+
+from datetime import date
+
+def upsert_autopilot_log(db: Session, log_data: dict) -> 'AutopilotLogModel':
+    """Update today's autopilot run log entry or create a new one."""
+    run_date = log_data.get("run_date", date.today())
+    
+    # Try to find today's log
+    existing_log = db.query(AutopilotLogModel).filter(AutopilotLogModel.run_date == run_date).first()
+    
+    if existing_log:
+        existing_log.brands_discovered += log_data.get("brands_discovered", 0)
+        existing_log.brands_skipped += log_data.get("brands_skipped", 0)
+        existing_log.pitches_generated += log_data.get("pitches_generated", 0)
+        existing_log.pitches_sent += log_data.get("pitches_sent", 0)
+        existing_log.tokens_used_estimate += log_data.get("tokens_used_estimate", 0)
+        
+        # Append new errors to existing ones
+        new_errors = log_data.get("errors", [])
+        if new_errors:
+            current_errors = list(existing_log.errors) if existing_log.errors else []
+            current_errors.extend(new_errors)
+            existing_log.errors = current_errors
+            
+        db.commit()
+        db.refresh(existing_log)
+        return existing_log
+    else:
+        new_log = AutopilotLogModel(**log_data)
+        db.add(new_log)
+        db.commit()
+        db.refresh(new_log)
+        return new_log
+
+
+def get_autopilot_logs(db: Session, limit: int = 30) -> list:
+    """Get recent autopilot run logs, newest first."""
+    return db.query(AutopilotLogModel).order_by(
+        AutopilotLogModel.created_at.desc()
+    ).limit(limit).all()
+
+
+def get_autopilot_log_for_today(db: Session) -> Optional['AutopilotLogModel']:
+    """Get the autopilot log for the current day to check pacing stats."""
+    from datetime import date
+    return db.query(AutopilotLogModel).filter(
+        AutopilotLogModel.run_date == date.today()
+    ).first()
+
+def get_latest_autopilot_log(db: Session) -> Optional['AutopilotLogModel']:
+    """Get the most recent autopilot run log."""
+    return db.query(AutopilotLogModel).order_by(
+        AutopilotLogModel.created_at.desc()
+    ).first()
+
+
+def is_brand_blacklisted(db: Session, email: str) -> bool:
+    """Check if a brand's email domain is on the blacklist."""
+    config = get_autopilot_config(db)
+    if not config or not config.blacklisted_domains:
+        return False
+    
+    domain = email.split("@")[-1].lower() if "@" in email else ""
+    return domain in [d.lower() for d in config.blacklisted_domains]

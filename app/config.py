@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     postgres_password: str
     gemini_api_key: str
     resend_api_key: str
+    resend_webhook_secret: str = ""  # Optional — for webhook signature verification
     api_base_url: str = "http://localhost:8000"
     ai_provider: str
     secret_key: str

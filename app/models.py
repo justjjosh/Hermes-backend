@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean, TIMESTAMP, JSON, ARRAY, Numeric, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, Boolean, TIMESTAMP, JSON, ARRAY, Numeric, ForeignKey, Date
 from app.database import Base
 from datetime import datetime
 from sqlalchemy.sql import func
@@ -72,3 +72,43 @@ class Pitch(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(
         TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+
+class AutopilotConfig(Base):
+    """Singleton table — only one row should ever exist.
+    
+    Stores the user's autopilot preferences: which niches to target,
+    how many pitches per day, blacklisted domains to skip, etc.
+    """
+    __tablename__ = "autopilot_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    is_active = Column(Boolean, default=False)
+    daily_limit = Column(Integer, default=2)  # Start conservative (warm-up)
+    niches = Column(ARRAY(String), server_default='{}')
+    excluded_categories = Column(ARRAY(String), server_default='{}')
+    blacklisted_domains = Column(ARRAY(String), server_default='{}')
+    min_confidence = Column(String(20), default='medium')
+    auto_send = Column(Boolean, default=False)  # Default to draft mode for safety
+    run_hour = Column(Integer, default=9)  # Hour of day (0-23) when autopilot runs
+    last_run_at = Column(TIMESTAMP)
+    total_sent = Column(Integer, default=0)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+
+class AutopilotLog(Base):
+    """One row per autopilot run. Audit trail for every daily cycle."""
+    __tablename__ = "autopilot_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_date = Column(Date, nullable=False)
+    brands_discovered = Column(Integer, default=0)
+    brands_skipped = Column(Integer, default=0)
+    pitches_generated = Column(Integer, default=0)
+    pitches_sent = Column(Integer, default=0)
+    errors = Column(JSON, server_default='[]')
+    tokens_used_estimate = Column(Integer, default=0)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+

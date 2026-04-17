@@ -44,11 +44,6 @@ def search_brand(request: BrandDiscoveryRequest, db: Session = Depends(get_db)):
     # Step 3: Validate and sanitize the result before saving/returning
     # so Pydantic validation doesn't blow up
     result.setdefault("brand_name", request.brand_name)
-    result.setdefault("parent_company", None)
-    result.setdefault("website", None)
-    result.setdefault("instagram", None)
-    result.setdefault("category", None)
-    result.setdefault("description", None)
     result.setdefault("contacts", [])
     
     # Sanitize each contact — make sure all required fields exist

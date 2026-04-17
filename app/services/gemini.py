@@ -96,8 +96,9 @@ Return ONLY valid JSON in this exact format:
 """
 
         # Call Gemini API with JSON output
-        # Only retry twice for pitch generation — if quota is exhausted,
-        max_retries = 2
+        # Retry up to 4 times for rate limits — autopilot runs in the background
+        # so we can afford to wait longer than interactive requests.
+        max_retries = 4
         for attempt in range(max_retries):
             try:
                 response = self.model.generate_content(
@@ -123,11 +124,10 @@ Return ONLY valid JSON in this exact format:
                     if match:
                         wait_time = float(match.group(1)) + 1  # Add 1s buffer
                     else:
-                        wait_time = 15
+                        wait_time = 15 * (attempt + 1)  # Escalating: 15s, 30s, 45s
 
-                    # If Gemini wants us to wait more than 30s, fail fast
-                    # instead of blocking the request for a full minute
-                    if wait_time > 30:
+                    # Cap at 60s — autopilot can wait, but not forever
+                    if wait_time > 60:
                         raise Exception(
                             "Gemini rate limit reached. "
                             "You've made too many AI requests recently. "
@@ -147,37 +147,160 @@ Return ONLY valid JSON in this exact format:
 
         return pitch
 
-    def discover_brands(self, niches: List[str], limit: int = 10) -> List[dict]:
+    def discover_brands(self, niches: List[str], limit: int = 5) -> List[dict]:
         """
-        Discover brands matching given niches(Phase 9 - Auto-pilot).
-
+        Discover multiple brands in a SINGLE Gemini call (token-efficient).
+        
+        Instead of calling the API once per brand (expensive), this sends ONE
+        prompt asking for N brands matching the given niches, complete with
+        contact emails. This is the core autopilot discovery method.
+        
+        Token efficiency:
+        - Single prompt, single response (vs N calls for N brands)
+        - Lean prompt — only asks for name + email + category
+        - Low temperature for factual accuracy
+        - No unnecessary metadata (website, description, etc.)
+        
         Args:
-            niches: List of niche keywords(e.g., ["skincare", "wellness"])
-            limit: Maximum number of brands to discover
+            niches: List of niche keywords (e.g., ["skincare", "wellness"])
+            limit: Maximum brands to discover (default 5, max 10)
 
         Returns:
-            List of dictionaries with brand data
+            List of dicts: [{name, email, category, confidence}, ...]
         """
-        raise NotImplementedError(
-            "Brand discovery will be implemented in Phase 9 (Auto-pilot mode)")
+        limit = min(limit, 10)  # Cap at 10 to keep response manageable
+        
+        google_search_tool = types.Tool(
+            google_search=types.GoogleSearch()
+        )
+        
+        niches_str = ", ".join(niches)
+        
+        # Lean prompt — request ONLY what we need (name + email + category)
+        prompt = f"""You are a brand outreach researcher. Find {limit} real brands in the following niches 
+that actively work with content creators and influencers: {niches_str}
+
+For each brand, find their REAL partnership or PR contact email address.
+
+RULES:
+1. Only include brands you can verify exist via web search
+2. Only include emails you actually found — do NOT guess or construct emails
+3. Focus on brands that have creator/influencer programs or PR contacts
+4. Avoid massive corporations (e.g., Apple, Google) — focus on mid-size brands
+5. Each brand must have a working email address
+
+Return ONLY valid JSON, no other text:
+{{
+    "brands": [
+        {{
+            "name": "Brand Name",
+            "email": "partnerships@brand.com",
+            "category": "skincare",
+            "confidence": "high"
+        }}
+    ]
+}}
+
+If you cannot find {limit} brands with verified emails, return fewer. Quality over quantity.
+"""
+
+        max_retries = 3
+        raw_text = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.discovery_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[google_search_tool],
+                        temperature=0.1  # Very low temp for factual discovery
+                    )
+                )
+                
+                if hasattr(response, 'text') and response.text:
+                    raw_text = response.text
+                elif hasattr(response, 'candidates') and response.candidates:
+                    raw_text = response.candidates[0].content.parts[0].text
+                else:
+                    raise Exception(f"Unexpected response structure: {response}")
+                
+                break
+                
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "resource_exhausted" in error_str or "rate" in error_str:
+                    if attempt == max_retries - 1:
+                        raise Exception(
+                            "Gemini rate limit reached during brand discovery. "
+                            "Wait 1-2 minutes and try again."
+                        )
+                    
+                    match = re.search(r'retry\s*(?:in|after)\s*(\d+\.?\d*)', error_str)
+                    wait_time = float(match.group(1)) + 1 if match else 15 * (attempt + 1)
+                    
+                    if wait_time > 60:
+                        raise Exception(
+                            "Gemini rate limit reached. Wait 1-2 minutes and try again."
+                        )
+                    
+                    logger.warning(
+                        f"Rate limited on batch discovery (attempt {attempt + 1}/{max_retries}). "
+                        f"Waiting {wait_time:.1f}s..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    raise
+        
+        # Parse response
+        try:
+            cleaned = raw_text.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+            if cleaned.startswith("```"):
+                cleaned = cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+            
+            result = json.loads(cleaned)
+            brands = result.get("brands", [])
+            
+            # Validate each brand has required fields
+            valid_brands = []
+            for b in brands:
+                if isinstance(b, dict) and b.get("name") and b.get("email") and "@" in b.get("email", ""):
+                    valid_brands.append({
+                        "name": b["name"],
+                        "email": b["email"],
+                        "category": b.get("category", niches[0] if niches else "general"),
+                        "confidence": b.get("confidence", "medium"),
+                    })
+            
+            return valid_brands
+            
+        except json.JSONDecodeError as e:
+            raise Exception(
+                f"Failed to parse batch discovery response. "
+                f"Response: {raw_text[:200]}... Error: {str(e)}"
+            )
     
     def discover_brand_contacts(self, brand_name: str) -> dict:
         """
-        Use Gemini with Google Search grounding to find real contact emails
-        and metadata for a brand.
+        Use Gemini with Google Search grounding to find real partnership/PR
+        contact emails for a brand. Only fetches emails — nothing else.
 
         How it works:
         1. We create a Google Search grounding tool so Gemini can search the web in real-time
-        2. We send a prompt asking Gemini to research the brand and find contact emails
-        3. Gemini searches the web, finds real data, and returns structured JSON
-        4. We parse and return the JSON with brand metadata + discovered contacts
+        2. We send a focused prompt asking ONLY for contact emails
+        3. Gemini searches the web, finds real emails, and returns structured JSON
+        4. We parse and return the JSON with just the discovered contacts
 
         Args:
             brand_name: The name of the brand to research (e.g., "CeraVe", "The Ordinary")
 
         Returns:
-            dict with keys: brand_name, parent_company, website, instagram,
-                           category, description, contacts (list of email dicts)
+            dict with keys: brand_name, contacts (list of email dicts)
         """
 
         # Step 1: Create the Google Search grounding tool
@@ -187,42 +310,30 @@ Return ONLY valid JSON in this exact format:
             google_search=types.GoogleSearch()
         )
 
-        # Step 2: Build the research prompt
-        # We ask Gemini to act as a brand researcher and find specific information
-        # The prompt requests JSON output so we can parse it programmatically
+        # Step 2: Build the focused email-only research prompt
+        # We keep this narrow on purpose — we only need emails, not full brand metadata.
+        # Asking for less = fewer tokens burned, faster response.
         prompt = f"""
-You are a brand research assistant. Research the brand "{brand_name}" using web search
-and find their real contact information.
+You are a brand outreach researcher. Your ONLY job is to find real contact email addresses
+for the brand "{brand_name}" that a content creator can use to pitch collaborations.
 
-I need you to find:
-1. The brand's official website URL
-2. Their Instagram handle
-3. Their parent company (if any)
-4. What category they fall into (e.g., skincare, wellness, beauty, fashion)
-5. A brief description of the brand (2-3 sentences)
-6. 2-4 REAL email addresses for contacting them about partnerships/collaborations
-
-For emails, look for:
-- PR/press contact emails
-- Partnership or collaboration emails  
+Search for:
+- PR / press contact emails
+- Partnership or collaboration emails
+- Influencer / creator program emails
 - Marketing department emails
-- General contact emails from their website
-- Influencer/creator program emails
+- General contact emails (only if nothing more specific exists)
 
-For each email, classify it as one of: "pr", "partnerships", "marketing", "general", "influencer"
-and rate your confidence as "high", "medium", or "low".
+IMPORTANT RULES:
+1. Only include emails you actually found on their website, social media, or press pages.
+2. Do NOT make up, guess, or construct email addresses.
+3. Do NOT include social media links, websites, or any other metadata — emails ONLY.
+4. For each email, classify its type as one of: "pr", "partnerships", "marketing", "general", "influencer"
+5. Rate your confidence as "high", "medium", or "low".
 
-IMPORTANT: Only include emails you actually found on their website, social media, or press pages.
-Do NOT make up or guess email addresses.
-
-Return your response as valid JSON in this exact format:
+Return ONLY valid JSON in this exact format, no other text:
 {{
     "brand_name": "{brand_name}",
-    "parent_company": "Parent Company Name or null",
-    "website": "https://example.com",
-    "instagram": "@handle",
-    "category": "skincare",
-    "description": "Brief brand description here.",
     "contacts": [
         {{
             "email": "press@example.com",
@@ -233,8 +344,7 @@ Return your response as valid JSON in this exact format:
     ]
 }}
 
-If you cannot find any contact emails, return an empty contacts list.
-Return ONLY the JSON, no other text.
+If you cannot find any real contact emails, return an empty contacts list.
 """
 
         # Step 3: Send the request to Gemini using the NEW SDK
